@@ -264,3 +264,50 @@ class LaggedCovariance(StreamingEstimator, ProgressReporter):
         if self.c0t:
             if self._rc.storage_XY.nsave <= ns:
                 self._rc.storage_XY.nsave = ns
+
+
+
+class PairCovariances(StreamingEstimator):
+    """
+    Parameters
+    ----------
+
+    """
+
+    def __init__(self, k=6, block_size=5000, mode='sliding'):
+        super(PairCovariances, self).__init__()
+        if mode not in ('sliding', 'linear'):
+            raise
+        self.set_params(k=k, mode=mode, block_size=block_size)
+        self._covs = []
+
+    def _process(self, X, Y):
+        from scipy.linalg import svd
+
+        U, S, V_T = svd(X, full_matrices=False)
+        UU, SS, VV_T = svd(Y, full_matrices=False)
+
+        # this is hopefully sparse for real data.
+        #
+        #
+        V, VV = V_T.T, VV_T.T
+        U_UU = np.matmul(U.T, UU)
+
+    def _estimate(self, X):
+        if self.mode == 'sliding':
+            it = X.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=False)
+            for X, Y in it:
+                self._process(X, Y)
+        elif self.mode == 'linear':
+            it = X.iterator(chunk=self.block_size, return_trajindex=False)
+            X_, Y_ = None, None
+
+            for X in it:
+                Y_ = X
+
+                if X_ is not None:
+                    self._process(X_, Y_)
+
+                X_ = Y_
+        else:
+            raise NotImplementedError()

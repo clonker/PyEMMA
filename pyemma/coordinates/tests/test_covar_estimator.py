@@ -484,5 +484,36 @@ class TestCovarEstimatorWeightsList(unittest.TestCase):
         c.estimate(x, weights=None)
         c.estimate(x, weights=x[:,0])
 
+
+class TestCovPairs(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        #cls.data = source('/group/ag_cmb/simulation-data/BPTI_Shaw/calpha/bpti-1traj.xtc', top='/group/ag_cmb/simulation-data/BPTI_Shaw/calpha/bpti-c-alpha.pdb')
+        from glob import glob
+        cls.data = source(glob("/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/*.dcd")[0],
+                          top="/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/GTT-0-protein.pdb")
+    def test_linear(self):
+        from pyemma.coordinates.estimation.covariance import PairCovariances
+        c = PairCovariances(block_size=500, mode='linear')
+        c.estimate(self.data)
+
+        s = 0
+        for a,b,c in c._covs:
+            s+= a.nbytes + b.nbytes + c.nbytes
+
+        print (s/1024**2)
+
+    def test_sliding(self):
+        from pyemma.coordinates.estimation.covariance import PairCovariances
+        c = PairCovariances(block_size=500, mode='sliding')
+        c.estimate(self.data)
+
+        s = 0
+        for a,b,c in c._covs:
+            s += a.nbytes + b.nbytes + c.nbytes
+
+        print (s/1024**2)
+
 if __name__ == "__main__":
     unittest.main()
