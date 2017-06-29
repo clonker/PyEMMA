@@ -32,7 +32,7 @@ class StreamingEstimator(Estimator):
     in a streaming fashion.
     """
 
-    def __init__(self, chunksize=None):
+    def __init__(self, chunksize=3000):
         super(StreamingEstimator, self).__init__()
         self._chunksize = chunksize
 

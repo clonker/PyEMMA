@@ -272,16 +272,19 @@ class LinearCovariancesSplit(object):
         self.block_size = block_size
 
     def split(self, X):
-        it = X.iterator(chunk=self.block_size, return_trajindex=False)
-        X_, Y_ = None, None
+        with X.iterator(chunk=self.block_size, return_trajindex=True) as it:
+            X_, Y_ = None, None
 
-        for X in it:
-            Y_ = X
+            for itraj, X in it:
+                Y_ = X
 
-            if X_ is not None:
-                yield X_, Y_, it.last_chunk_in_traj
+                if X_ is not None and len(X_) == self.block_size and len(Y_) == self.block_size:
+                    yield itraj, X_, Y_
 
-            X_ = Y_
+                if not it.last_chunk_in_traj:
+                    X_ = Y_
+                else:
+                    X_, Y_ = None, None
 
 
 class SlidingCovariancesSplit(object):
@@ -289,9 +292,11 @@ class SlidingCovariancesSplit(object):
         self.block_size = block_size
 
     def split(self, X):
-        it = X.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=False)
-        for X, Y in it:
-            yield X, Y, it.last_chunk_in_traj
+        it = X.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=True)
+        with it:
+            for data in it:
+                if len(data[1]) == 2 * self.block_size - 1 and len(data[0]) != 2 * self.block_size - 1:
+                    yield data
 
 
 class DecomposedCovPair(object):
@@ -329,7 +334,7 @@ class Covariances(StreamingEstimator):
             raise ValueError('unsupported mode: %s' % mode)
         self.set_params(k=k, mode=mode, block_size=block_size)
 
-    def _process(self, X, Y, last_chunk_in_traj):
+    def _process(self, itraj, X, Y):
         """
         need to store:
         * V
@@ -340,12 +345,10 @@ class Covariances(StreamingEstimator):
 
         if sliding window: only store the Y svd, as the X svd is the previous Y svd (store X only at start of traj).
         """
+
         from scipy.linalg import svd
 
-        if len(Y) != self.block_size:
-            return
-
-        current_covs = self.covs_[-1]
+        current_covs = self.covs_[itraj]
 
         if self.mode == "sliding" and len(current_covs) > 0:
             U, S, V = self._U, current_covs[-1]._SS, current_covs[-1]._VV
@@ -360,11 +363,8 @@ class Covariances(StreamingEstimator):
 
         current_covs.append(DecomposedCovPair(U, S, V, UU, SS, VV))
 
-        if last_chunk_in_traj:
-            self.covs_.append([])
-
     def _estimate(self, X):
-        self.covs_ = [[]]
+        self.covs_ = [[] for _ in range(X.ntraj)]
 
         if self.mode == 'sliding':
             splitter = SlidingCovariancesSplit(self.block_size)
@@ -373,8 +373,8 @@ class Covariances(StreamingEstimator):
         else:
             raise NotImplementedError("unsupported mode: %s" % self.mode)
 
-        for X, Y, last_chunk_in_traj in splitter.split(X):
-            self._process(X, Y, last_chunk_in_traj)
+        for data in splitter.split(X):
+            self._process(*data)
 
 
 
