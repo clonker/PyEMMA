@@ -446,7 +446,7 @@ class _LaggedIterator(object):
         return data, data_lagged
 
     def __enter__(self):
-        self._it.__enter__()
+        return self._it.__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._it.__exit__(exc_type, exc_val, exc_tb)
