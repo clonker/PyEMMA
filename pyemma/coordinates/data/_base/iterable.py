@@ -269,7 +269,7 @@ class Iterable(six.with_metaclass(ABCMeta, ProgressReporter, Loggable)):
         Example
         -------
         Assume you want to save features calculated by some FeatureReader to ASCII:
-        
+
         >>> import numpy as np, pyemma
         >>> import os
         >>> from pyemma.util.files import TemporaryDirectory
@@ -395,6 +395,10 @@ class _LaggedIterator(object):
     def __next__(self):
         return self.next()
 
+    @property
+    def last_chunk_in_traj(self):
+        return self._it.last_chunk_in_traj
+
     def next(self):
         itraj_changed = False
         while (self._it._itraj not in self._sufficently_long_trajectories
@@ -473,6 +477,10 @@ class _LegacyLaggedIterator(object):
 
     def __next__(self):
         return self.next()
+
+    @property
+    def last_chunk_in_traj(self):
+        return self._it_lagged.last_chunk_in_traj
 
     def next(self):
         itraj, data = self._it.next()

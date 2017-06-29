@@ -494,26 +494,26 @@ class TestCovPairs(unittest.TestCase):
         cls.data = source(glob("/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/*.dcd")[0],
                           top="/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/GTT-0-protein.pdb")
     def test_linear(self):
-        from pyemma.coordinates.estimation.covariance import PairCovariances
-        c = PairCovariances(block_size=500, mode='linear')
+        from pyemma.coordinates.estimation.covariance import Covariances
+        c = Covariances(block_size=500, mode='linear')
         c.estimate(self.data)
 
-        s = 0
-        for a,b,c in c._covs:
-            s+= a.nbytes + b.nbytes + c.nbytes
-
-        print (s/1024**2)
+        # s = 0
+        # for a,b,c in c.covs_:
+        #     s+= a.nbytes + b.nbytes + c.nbytes
+        #
+        # print (s/1024**2)
 
     def test_sliding(self):
-        from pyemma.coordinates.estimation.covariance import PairCovariances
-        c = PairCovariances(block_size=500, mode='sliding')
+        from pyemma.coordinates.estimation.covariance import Covariances
+        c = Covariances(block_size=500, mode='sliding')
         c.estimate(self.data)
 
-        s = 0
-        for a,b,c in c._covs:
-            s += a.nbytes + b.nbytes + c.nbytes
-
-        print (s/1024**2)
+        # s = 0
+        # for a,b,c in c.covs_:
+        #     s += a.nbytes + b.nbytes + c.nbytes
+        #
+        # print (s/1024**2)
 
 if __name__ == "__main__":
     unittest.main()
