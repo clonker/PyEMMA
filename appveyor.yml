@@ -11,9 +11,9 @@ environment:
   matrix:
     - MINICONDA_PYTHON: "C:\\Miniconda"
       CONDA_PY: "27"
-    
+
     - MINICONDA_PYTHON: "C:\\Miniconda-x64"
-      CONDA_PY: "27" 
+      CONDA_PY: "27"
       ARCH: "64"
 
     - MINICONDA_PYTHON: "C:\\Miniconda3"
@@ -27,10 +27,15 @@ environment:
       CONDA_PY: "36"
       ARCH: "64"
 
+    - MINICONDA_PYTHON: "C:\\Miniconda3-x64"
+      CONDA_PY: "36"
+      ARCH: "64"
+      CONDA_NPY: "113"
+
 install:
   - "SET PATH=%MINICONDA_PYTHON%;%MINICONDA_PYTHON%\\Scripts;%PATH%;"
 
-  - conda config --set always_yes true 
+  - conda config --set always_yes true
   - conda config --add channels conda-forge
   - conda install -q conda-build=2.1.15 jinja2
 
@@ -46,5 +51,5 @@ test_script:
   - "%CMD_IN_ENV% conda build -q devtools/conda-recipe"
 
 #on_success:
-#  - devtools/ci/appveyor/after_success.bat  
+#  - devtools/ci/appveyor/after_success.bat
 
