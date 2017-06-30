@@ -501,7 +501,7 @@ class TestCovPairs(unittest.TestCase):
             "/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/*.dcd")[
                               0],
                           top="/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/GTT-0-protein.pdb")
-
+        assert cls.data.ndim >= 2
     def test_linear(self):
         from pyemma.coordinates.estimation.covariance import Covariances
         c = Covariances(block_size=500, mode='linear')
@@ -525,11 +525,11 @@ class TestCovPairs(unittest.TestCase):
         # print (s/1024**2)
 
     def test_lengths_sliding(self):
-        data = [np.random.random((1000, 2)),
-                np.random.random((1000, 2)),
-                np.random.random((500, 2))]
+        data = [np.random.random((1000, 3)),
+                np.random.random((1000, 3)),
+                np.random.random((500, 3))]
         from pyemma.coordinates.estimation.covariance import Covariances
-        c = Covariances(block_size=100, mode='sliding')
+        c = Covariances(block_size=100, mode='sliding', k=2)
         c.estimate(data)
 
         self.assertEqual(len(c.covs_), 3)
@@ -537,12 +537,12 @@ class TestCovPairs(unittest.TestCase):
         self.assertEqual(len(c.covs_[1]), 4)
         self.assertEqual(len(c.covs_[2]), 2)
 
-    def test_lengths_lnear(self):
-        data = [np.random.random((1000, 2)),
-                np.random.random((1000, 2)),
-                np.random.random((500, 2))]
+    def test_lengths_linear(self):
+        data = [np.random.random((1000, 3)),
+                np.random.random((1000, 3)),
+                np.random.random((500, 3))]
         from pyemma.coordinates.estimation.covariance import Covariances
-        c = Covariances(block_size=100, mode='linear')
+        c = Covariances(block_size=100, mode='linear', k=2)
         c.estimate(data)
 
         self.assertEqual(len(c.covs_), 3)

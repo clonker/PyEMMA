@@ -395,6 +395,12 @@ class _LaggedIterator(object):
     def __next__(self):
         return self.next()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
     @property
     def last_chunk(self):
         return self._it.last_chunk
@@ -446,7 +452,8 @@ class _LaggedIterator(object):
         return data, data_lagged
 
     def __enter__(self):
-        return self._it.__enter__()
+        self._it = self._it.__enter__()
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._it.__exit__(exc_type, exc_val, exc_tb)
@@ -481,6 +488,12 @@ class _LegacyLaggedIterator(object):
 
     def __next__(self):
         return self.next()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
 
     @property
     def last_chunk(self):

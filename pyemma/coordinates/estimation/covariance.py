@@ -291,12 +291,12 @@ class SlidingCovariancesSplit(object):
     def __init__(self, block_size):
         self.block_size = block_size
 
-    def split(self, X):
-        it = X.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=True)
-        with it:
-            for data in it:
-                if len(data[1]) == 2 * self.block_size - 1 and len(data[0]) != 2 * self.block_size - 1:
-                    yield data
+    def split(self, iterable):
+       # it =
+        with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=True) as it:
+            for itraj, X, Y in it:
+                if len(Y) == 2 * self.block_size - 1 and len(X) == 2 * self.block_size - 1:
+                    yield itraj, X, Y
 
 
 class DecomposedCovPair(object):
@@ -318,6 +318,9 @@ class DecomposedCovPair(object):
 
     @property
     def C11(self):
+        pass
+
+    def cumvar(self):
         pass
 
     def nbytes(self):
@@ -349,16 +352,16 @@ class Covariances(StreamingEstimator):
         if sliding window: only store the Y svd, as the X svd is the previous Y svd (store X only at start of traj).
         """
 
-        from scipy.linalg import svd
+        from scipy.sparse.linalg import svds as svd
 
         current_covs = self.covs_[itraj]
 
         if self.mode == "sliding" and len(current_covs) > 0:
             U, S, V = self._U, current_covs[-1]._SS, current_covs[-1]._VV
         else:
-            U, S, V_T = svd(X, full_matrices=False)
+            U, S, V_T = svd(X, k=self.k)
             V = V_T.T
-        UU, SS, VV_T = svd(Y, full_matrices=False)
+        UU, SS, VV_T = svd(Y, k=self.k)
         VV = VV_T.T
 
         if self.mode == "sliding":
@@ -378,8 +381,6 @@ class Covariances(StreamingEstimator):
 
         for data in splitter.split(X):
             self._process(*data)
-
-
 
     def score(self, iterable):
         """
