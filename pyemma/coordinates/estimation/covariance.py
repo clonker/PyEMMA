@@ -320,6 +320,9 @@ class DecomposedCovPair(object):
     def C11(self):
         pass
 
+    def nbytes(self):
+        return self._S.nbytes + self._SS.nbytes + self._U_Uprime.nbytes + self._V.nbytes + self._VV.nbytes
+
 
 class Covariances(StreamingEstimator):
     """
