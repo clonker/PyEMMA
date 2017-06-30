@@ -4,8 +4,9 @@ import numpy as np
 
 from pyemma.coordinates import covariance_lagged
 from pyemma.coordinates import source
+from pyemma.coordinates.estimation.covariance import Covariances
 
-__author__ = 'noe'
+__author__ = 'noe, marscher, clonker'
 
 data = np.random.rand(5000, 2)
 weights = np.random.randn(len(data))
@@ -502,8 +503,12 @@ class TestCovPairs(unittest.TestCase):
                               0],
                           top="/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/GTT-0-protein.pdb")
         assert cls.data.ndim >= 2
+
+        cls.data_gen = [np.random.random((1000, 3)),
+                        np.random.random((1000, 3)),
+                        np.random.random((500, 3))]
+
     def test_linear(self):
-        from pyemma.coordinates.estimation.covariance import Covariances
         c = Covariances(block_size=500, mode='linear')
         c.estimate(self.data)
 
@@ -514,7 +519,6 @@ class TestCovPairs(unittest.TestCase):
         # print (s/1024**2)
 
     def test_sliding(self):
-        from pyemma.coordinates.estimation.covariance import Covariances
         c = Covariances(block_size=500, mode='sliding')
         c.estimate(self.data)
 
@@ -525,12 +529,8 @@ class TestCovPairs(unittest.TestCase):
         # print (s/1024**2)
 
     def test_lengths_sliding(self):
-        data = [np.random.random((1000, 3)),
-                np.random.random((1000, 3)),
-                np.random.random((500, 3))]
-        from pyemma.coordinates.estimation.covariance import Covariances
         c = Covariances(block_size=100, mode='sliding', k=2)
-        c.estimate(data)
+        c.estimate(self.data_gen)
 
         self.assertEqual(len(c.covs_), 3)
         self.assertEqual(len(c.covs_[0]), 4)
@@ -538,18 +538,27 @@ class TestCovPairs(unittest.TestCase):
         self.assertEqual(len(c.covs_[2]), 2)
 
     def test_lengths_linear(self):
-        data = [np.random.random((1000, 3)),
-                np.random.random((1000, 3)),
-                np.random.random((500, 3))]
-        from pyemma.coordinates.estimation.covariance import Covariances
         c = Covariances(block_size=100, mode='linear', k=2)
-        c.estimate(data)
+        c.estimate(self.data_gen)
 
         self.assertEqual(len(c.covs_), 3)
         self.assertEqual(len(c.covs_[0]), 9)
         self.assertEqual(len(c.covs_[1]), 9)
         self.assertEqual(len(c.covs_[2]), 4)
 
+    def test_low_rank(self):
+        block_size = 2* 100 -1
+        full_rank_cov = covariance_lagged(self.data_gen, lag=block_size, ctt=True, remove_data_mean=False, bessel=False)
+        c00 = full_rank_cov.cov
+        c01 = full_rank_cov.cov_tau
+        c11 = full_rank_cov.cov_tau_tau
+
+        c = Covariances(block_size=block_size, mode='sliding', k=2)
+        c.estimate(self.data_gen)
+        from functools import reduce
+        c00_ = reduce(lambda x,y: x+y, (c.C00 for c in c.covs_[0])) / len(c.covs_[0])
+
+        np.testing.assert_allclose(c00_, c00)
 
 if __name__ == "__main__":
     unittest.main()

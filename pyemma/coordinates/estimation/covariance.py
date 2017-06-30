@@ -17,14 +17,19 @@
 
 from __future__ import absolute_import
 
-import numpy as np
 import numbers
 from math import log
-from pyemma.util.types import is_float_vector, ensure_float_vector
-from pyemma.coordinates.data._base.streaming_estimator import StreamingEstimator
+
+import numpy as np
+from scipy.sparse import dia_matrix
+
 from pyemma._base.progress import ProgressReporter
 from pyemma._ext.variational.estimators.running_moments import running_covar
-
+from pyemma.coordinates.data._base.streaming_estimator import StreamingEstimator
+from pyemma.util.metrics import vamp_score
+from pyemma.util.types import is_float_vector, ensure_float_vector
+from pyemma.util.annotators import cached_property
+from pyemma.util.linalg import mdot
 
 __all__ = ['LaggedCovariance']
 
@@ -249,6 +254,11 @@ class LaggedCovariance(StreamingEstimator, ProgressReporter):
         return self._rc.cov_XY(bessel=self.bessel)
 
     @property
+    def cov_tau_tau(self):
+        self._check_estimated()
+        return self._rc.cov_YY(bessel=self.bessel)
+
+    @property
     def nsave(self):
         if self.c00:
             return self._rc.storage_XX.nsave
@@ -292,7 +302,6 @@ class SlidingCovariancesSplit(object):
         self.block_size = block_size
 
     def split(self, iterable):
-       # it =
         with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=True) as it:
             for itraj, X, Y in it:
                 if len(Y) == 2 * self.block_size - 1 and len(X) == 2 * self.block_size - 1:
@@ -307,21 +316,26 @@ class DecomposedCovPair(object):
         self._S = S
         self._SS = SS
         self._U_Uprime = np.matmul(U.T, UU)
+        self._N = len(U) -1
 
     @property
     def C00(self):
-        pass
+        #S = dia_matrix(self._S**2)
+        #return mdot(self._V, S, self._V.T)
+        res = mdot(self._V, np.diag(self._S**2), self._V.T) / self._N
+        return res
 
     @property
     def C10(self):
-        pass
+        return mdot(self._V, self._S, self._U_Uprime, self._SS, self._VV.T)
 
     @property
     def C11(self):
-        pass
+        S = dia_matrix(self._SS**2)
+        return mdot(self._VV, S, self._VV.T)
 
     def cumvar(self):
-        pass
+        return np.sum(self._S**2)
 
     def nbytes(self):
         return self._S.nbytes + self._SS.nbytes + self._U_Uprime.nbytes + self._V.nbytes + self._VV.nbytes
@@ -382,10 +396,11 @@ class Covariances(StreamingEstimator):
         for data in splitter.split(X):
             self._process(*data)
 
-    def score(self, iterable):
+    def score(self, scoring_method='vamp2'):
         """
 
         :param iterable:
         :return:
         """
-        pass
+        from sklearn.model_selection import cross_val_score
+        return vamp_score(k=self.k, score=scoring_method)
