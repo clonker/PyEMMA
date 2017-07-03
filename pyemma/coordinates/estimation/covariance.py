@@ -304,6 +304,7 @@ class SlidingCovariancesSplit(object):
     def split(self, iterable):
         with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=True) as it:
             for itraj, X, Y in it:
+                # only return a result, if block_size matches.
                 if len(Y) == 2 * self.block_size - 1 and len(X) == 2 * self.block_size - 1:
                     yield itraj, X, Y
 
@@ -345,6 +346,15 @@ class Covariances(StreamingEstimator):
     """
     Parameters
     ----------
+
+    k : int, default=6
+        rank of sparse svd of input blocks
+
+    block_size: int, default=5000
+        size of running blocks of input stream.
+
+    mode: str, default="sliding"
+
 
     """
 
@@ -396,11 +406,20 @@ class Covariances(StreamingEstimator):
         for data in splitter.split(X):
             self._process(*data)
 
-    def score(self, scoring_method='vamp2'):
+        self.covs_ = np.array(self.covs_)
+
+    # TODO: this would be an interface of tica, wouldnt it?
+    def score(self, n_samples_test, scoring_method='vamp2'):
         """
 
-        :param iterable:
-        :return:
         """
-        from sklearn.model_selection import cross_val_score
-        return vamp_score(k=self.k, score=scoring_method)
+        if not self._estimated:
+            raise RuntimeError('execute estimation first prior calling this method.')
+
+        # split test and train test sets from input
+
+        test_inds = np.random.choice(len(self.covs_), n_samples_test)
+        C00_train = self.covs_[test_inds]
+        K = 'left singular values of Koopman operator'
+        # K, C00_train, C0t_train, Ctt_train, C00_test, C0t_test, Ctt_test, k=None
+        return vamp_score(K=K, k=self.k, score=scoring_method)

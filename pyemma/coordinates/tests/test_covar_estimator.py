@@ -520,13 +520,9 @@ class TestCovPairs(unittest.TestCase):
 
     def test_sliding(self):
         c = Covariances(block_size=500, mode='sliding')
-        c.estimate(self.data)
+        c.estimate(self.data_gen)
 
-        # s = 0
-        # for a,b,c in c.covs_:
-        #     s += a.nbytes + b.nbytes + c.nbytes
-        #
-        # print (s/1024**2)
+        c.score(2)
 
     def test_lengths_sliding(self):
         c = Covariances(block_size=100, mode='sliding', k=2)
