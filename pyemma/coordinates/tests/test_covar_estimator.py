@@ -126,11 +126,11 @@ class TestCovarEstimator(unittest.TestCase):
         cls.X0_sym_wobj = cls.X - cls.m_sym_wobj
         cls.Y0_sym_wobj = cls.Y - cls.m_sym_wobj
         cls.Mxx0_sym_wobj = (1.0 / cls.wesum_obj_sym) * (
-        np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.X0_sym_wobj) \
-        + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.Y0_sym_wobj))
+            np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.X0_sym_wobj) \
+            + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.Y0_sym_wobj))
         cls.Mxy0_sym_wobj = (1.0 / cls.wesum_obj_sym) * (
-        np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.Y0_sym_wobj) \
-        + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.X0_sym_wobj))
+            np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.Y0_sym_wobj) \
+            + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.X0_sym_wobj))
 
         # weighted moments, object case, constant mean
         cls.sx_c_wobj = (cls.weights_obj[:, None] * cls.Xc).sum(axis=0)
@@ -406,11 +406,11 @@ class TestCovarianceEstimatorGivenWeights(TestCovarEstimator):
         cls.X0_sym_wobj = cls.X - cls.m_sym_wobj
         cls.Y0_sym_wobj = cls.Y - cls.m_sym_wobj
         cls.Mxx0_sym_wobj = (1.0 / cls.wesum_obj_sym) * (
-        np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.X0_sym_wobj) \
-        + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.Y0_sym_wobj))
+            np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.X0_sym_wobj) \
+            + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.Y0_sym_wobj))
         cls.Mxy0_sym_wobj = (1.0 / cls.wesum_obj_sym) * (
-        np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.Y0_sym_wobj) \
-        + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.X0_sym_wobj))
+            np.dot((cls.weights_obj[:, None] * cls.X0_sym_wobj).T, cls.Y0_sym_wobj) \
+            + np.dot((cls.weights_obj[:, None] * cls.Y0_sym_wobj).T, cls.X0_sym_wobj))
 
         # weighted moments, object case, constant mean
         cls.sx_c_wobj = (cls.weights_obj[:, None] * cls.Xc).sum(axis=0)
@@ -498,10 +498,10 @@ class TestCovPairs(unittest.TestCase):
     def setUpClass(cls):
         # cls.data = source('/group/ag_cmb/simulation-data/BPTI_Shaw/calpha/bpti-1traj.xtc', top='/group/ag_cmb/simulation-data/BPTI_Shaw/calpha/bpti-c-alpha.pdb')
         from glob import glob
+        path = "/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/"
         cls.data = source(glob(
-            "/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/*.dcd")[
-                              0],
-                          top="/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/GTT-0-protein.pdb")
+            path + "*.dcd")[:3],
+                          top=path + "/GTT-0-protein.pdb")
         assert cls.data.ndim >= 2
 
         cls.data_gen = [np.random.random((1000, 3)),
@@ -511,7 +511,7 @@ class TestCovPairs(unittest.TestCase):
     def test_linear(self):
         c = Covariances(block_size=500, mode='linear')
         c.estimate(self.data)
-
+        c.score()
         # s = 0
         # for a,b,c in c.covs_:
         #     s+= a.nbytes + b.nbytes + c.nbytes
@@ -522,7 +522,8 @@ class TestCovPairs(unittest.TestCase):
         c = Covariances(block_size=500, mode='sliding')
         c.estimate(self.data_gen)
 
-        c.score(2)
+        s = c.score()
+        print(s)
 
     def test_lengths_sliding(self):
         c = Covariances(block_size=100, mode='sliding', k=2)
@@ -532,6 +533,10 @@ class TestCovPairs(unittest.TestCase):
         self.assertEqual(len(c.covs_[0]), 4)
         self.assertEqual(len(c.covs_[1]), 4)
         self.assertEqual(len(c.covs_[2]), 2)
+
+        c.covs_[0][0].C00
+        c.covs_[0][0].C01
+        c.covs_[0][0].C11
 
     def test_lengths_linear(self):
         c = Covariances(block_size=100, mode='linear', k=2)
@@ -543,7 +548,7 @@ class TestCovPairs(unittest.TestCase):
         self.assertEqual(len(c.covs_[2]), 4)
 
     def test_low_rank(self):
-        block_size = 2* 100 -1
+        block_size = 2 * 100 - 1
         full_rank_cov = covariance_lagged(self.data_gen, lag=block_size, ctt=True, remove_data_mean=False, bessel=False)
         c00 = full_rank_cov.cov
         c01 = full_rank_cov.cov_tau
@@ -552,9 +557,10 @@ class TestCovPairs(unittest.TestCase):
         c = Covariances(block_size=block_size, mode='sliding', k=2)
         c.estimate(self.data_gen)
         from functools import reduce
-        c00_ = reduce(lambda x,y: x+y, (c.C00 for c in c.covs_[0])) / len(c.covs_[0])
+        c00_ = reduce(lambda x, y: x + y, (c.C00 for c in c.covs_[0])) / len(c.covs_[0])
 
         np.testing.assert_allclose(c00_, c00)
+
 
 if __name__ == "__main__":
     unittest.main()

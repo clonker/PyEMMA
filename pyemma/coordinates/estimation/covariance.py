@@ -18,22 +18,22 @@
 from __future__ import absolute_import
 
 import numbers
+from itertools import count
 from math import log
 
 import numpy as np
-from scipy.sparse import dia_matrix
+from scipy.sparse.linalg import svds
 
 from pyemma._base.progress import ProgressReporter
 from pyemma._ext.variational.estimators.running_moments import running_covar
 from pyemma.coordinates.data._base.streaming_estimator import StreamingEstimator
 from pyemma.util.metrics import vamp_score
 from pyemma.util.types import is_float_vector, ensure_float_vector
-from pyemma.util.annotators import cached_property
 from pyemma.util.linalg import mdot
 
 __all__ = ['LaggedCovariance']
 
-__author__ = 'paul, nueske'
+__author__ = 'paul, nueske, marscher, clonker'
 
 
 class LaggedCovariance(StreamingEstimator, ProgressReporter):
@@ -310,6 +310,7 @@ class SlidingCovariancesSplit(object):
 
 
 class DecomposedCovPair(object):
+    _ids = count(0)
 
     def __init__(self, U, S, V, UU, SS, VV):
         self._V = V
@@ -317,29 +318,46 @@ class DecomposedCovPair(object):
         self._S = S
         self._SS = SS
         self._U_Uprime = np.matmul(U.T, UU)
-        self._N = len(U) -1
+        self._N = 1 #len(U) -1
+        self.id = next(DecomposedCovPair._ids)
+
+    def __repr__(self):
+        return '[DecomposedCovPair <{id}>]'.format(id=self.id)
+
+    __str__ = __repr__
 
     @property
     def C00(self):
-        #S = dia_matrix(self._S**2)
-        #return mdot(self._V, S, self._V.T)
         res = mdot(self._V, np.diag(self._S**2), self._V.T) / self._N
         return res
 
     @property
-    def C10(self):
-        return mdot(self._V, self._S, self._U_Uprime, self._SS, self._VV.T)
+    def C01(self):
+        return mdot(self._V, np.diag(self._S), self._U_Uprime, np.diag(self._SS), self._VV.T) / self._N
 
     @property
     def C11(self):
-        S = dia_matrix(self._SS**2)
-        return mdot(self._VV, S, self._VV.T)
+        S = np.diag(self._SS**2)
+        return mdot(self._VV, S, self._VV.T) / self._N
 
-    def cumvar(self):
-        return np.sum(self._S**2)
-
+    @property
     def nbytes(self):
         return self._S.nbytes + self._SS.nbytes + self._U_Uprime.nbytes + self._V.nbytes + self._VV.nbytes
+
+    def combine(self, others):
+        C00_new = self.C00.copy()
+        C01_new = self.C01.copy()
+        C11_new = self.C11.copy()
+        for c in others:
+            C00_new += c.C00
+            C01_new += c.C01
+            C11_new += c.C11
+
+        C00_new /= len(others)
+        C01_new /= len(others)
+        C11_new /= len(others)
+
+        return C00_new, C01_new, C11_new
 
 
 class Covariances(StreamingEstimator):
@@ -375,17 +393,14 @@ class Covariances(StreamingEstimator):
 
         if sliding window: only store the Y svd, as the X svd is the previous Y svd (store X only at start of traj).
         """
-
-        from scipy.sparse.linalg import svds as svd
-
         current_covs = self.covs_[itraj]
 
         if self.mode == "sliding" and len(current_covs) > 0:
             U, S, V = self._U, current_covs[-1]._SS, current_covs[-1]._VV
         else:
-            U, S, V_T = svd(X, k=self.k)
+            U, S, V_T = svds(X, k=self.k)
             V = V_T.T
-        UU, SS, VV_T = svd(Y, k=self.k)
+        UU, SS, VV_T = svds(Y, k=self.k)
         VV = VV_T.T
 
         if self.mode == "sliding":
@@ -408,18 +423,39 @@ class Covariances(StreamingEstimator):
 
         self.covs_ = np.array(self.covs_)
 
-    # TODO: this would be an interface of tica, wouldnt it?
-    def score(self, n_samples_test, scoring_method='vamp2'):
+    # TODO: this would be an interface of tica, wouldnt it? (because it scores the estimated covariance matrix, cov or cov_tau?!)
+    def score(self, percentage_test=0.30, scoring_method='vamp2'):
         """
 
         """
         if not self._estimated:
             raise RuntimeError('execute estimation first prior calling this method.')
 
-        # split test and train test sets from input
+        shape = self.covs_.shape
+        p = (percentage_test, 1.0 - percentage_test)
+        sample = np.random.choice((True, False), size=shape, p=p)
 
-        test_inds = np.random.choice(len(self.covs_), n_samples_test)
-        C00_train = self.covs_[test_inds]
+        test = self.covs_[sample]
+        train = self.covs_[~sample]
+        # split test and train test sets from input
+        C00_test, C01_test, C11_test = test[0].combine(test[1:])
+        C00_train, C01_train, C11_train = train[0].combine(train[1:])
+
+        # TODO: why is this needed, eg. norming factor wrong?
+        C00_test = (C00_test + C00_test.T) / 2.0
+        C11_test = (C11_test + C11_test.T) / 2.0
+
+        C00_train = (C00_train + C00_train.T) / 2.0
+        C11_train = (C11_train + C11_train.T) / 2.0
+
         K = 'left singular values of Koopman operator'
+        from pyemma.coordinates import covariance_lagged
+        full_cov = covariance_lagged(self.data_producer, lag=1)
+        from scipy.sparse.linalg import svds
+        #from numpy.linalg import svd as svds
+        #U, s, Vt = svds(full_cov.cov_tau, k=self.k)
+        #K = U
         # K, C00_train, C0t_train, Ctt_train, C00_test, C0t_test, Ctt_test, k=None
-        return vamp_score(K=K, k=self.k, score=scoring_method)
+        return vamp_score(K=full_cov.cov_tau, C00_test=C00_test, C0t_test=C01_test, Ctt_test=C11_test,
+                          C00_train=C00_train, C0t_train=C01_train, Ctt_train=C11_train,
+                          k=self.k, score=scoring_method)
