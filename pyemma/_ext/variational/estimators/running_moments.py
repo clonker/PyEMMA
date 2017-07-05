@@ -246,7 +246,7 @@ class RunningCovar(object):
             else:
                 raise TypeError('weights is of type %s, must be a number or ndarray' % (type(weights)))
         # estimate and add to storage
-        if self.compute_XX and not self.compute_XY:
+        if self.compute_XX and not self.compute_XY and not self.compute_YY:
             w, s_X, C_XX = moments_XX(X, remove_mean=self.remove_mean, weights=weights, sparse_mode=self.sparse_mode, modify_data=self.modify_data)
             self.storage_XX.store(Moments(w, s_X, s_X, C_XX))
         elif self.compute_XX and self.compute_XY and not self.compute_YY:
@@ -262,8 +262,10 @@ class RunningCovar(object):
             w, s, C = moments_block(X, Y, remove_mean=self.remove_mean,
                                     sparse_mode=self.sparse_mode, modify_data=self.modify_data)
             # make copy in order to get independently mergeable moments
-            self.storage_XX.store(Moments(w, s[0], s[0], C[0][0]))
-            self.storage_XY.store(Moments(w, s[0], s[1], C[0][1]))
+            if self.compute_XX:
+                self.storage_XX.store(Moments(w, s[0], s[0], C[0][0]))
+            if self.compute_XY:
+                self.storage_XY.store(Moments(w, s[0], s[1], C[0][1]))
             self.storage_YY.store(Moments(w, s[1], s[1], C[1][1]))
 
     def sum_X(self):
