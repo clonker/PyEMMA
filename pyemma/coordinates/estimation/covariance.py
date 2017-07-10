@@ -281,18 +281,19 @@ class LaggedCovariance(StreamingEstimator, ProgressReporter):
 
 class LinearCovariancesSplit(object):
 
-    def __init__(self, block_size):
+    def __init__(self, block_size, offset):
         self.block_size = block_size
+        self.offset = offset
 
     def split(self, X):
-        with X.iterator(chunk=self.block_size, return_trajindex=True) as it:
+        with X.iterator(chunk=self.block_size, return_trajindex=False, skip=self.offset) as it:
             X_, Y_ = None, None
 
-            for itraj, X in it:
+            for X in it:
                 Y_ = X
 
-                if X_ is not None and len(X_) == self.block_size and len(Y_) == self.block_size:
-                    yield itraj, X_, Y_
+                if X_ is not None:
+                    yield X_, Y_
 
                 if not it.last_chunk_in_traj:
                     X_ = Y_
@@ -301,64 +302,15 @@ class LinearCovariancesSplit(object):
 
 
 class SlidingCovariancesSplit(object):
-    def __init__(self, block_size):
+    def __init__(self, block_size, offset):
         self.block_size = block_size
+        self.offset = offset
 
     def split(self, iterable):
-        with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=True) as it:
-            for itraj, X, Y in it:
-                # only return a result, if block_size matches.
-                if len(Y) == 2 * self.block_size - 1 and len(X) == 2 * self.block_size - 1:
-                    yield itraj, X, Y
-
-
-class DecomposedCovPair(object):
-    _ids = count(0)
-
-    def __init__(self, U, S, V, UU, SS, VV, tau):
-        self._V = V
-        self._VV = VV
-        self._S = S
-        self._SS = SS
-        self._U_Uprime = np.matmul(U.T, UU)
-        self.id = next(DecomposedCovPair._ids)
-        self._N = len(U)
-        self.tau = tau
-
-    def __repr__(self):
-        return '[DecomposedCovPair <{id}>]'.format(id=self.id)
-
-    __str__ = __repr__
-
-    @property
-    def C00(self):
-        res = mdot(self._V, np.diag(self._S**2), self._V.T)
-        return res
-
-    @property
-    def C01(self):
-        return mdot(self._V, np.diag(self._S), self._U_Uprime, np.diag(self._SS), self._VV.T)
-
-    @property
-    def C11(self):
-        S = np.diag(self._SS**2)
-        return mdot(self._VV, S, self._VV.T)
-
-    @property
-    def nbytes(self):
-        return self._S.nbytes + self._SS.nbytes + self._U_Uprime.nbytes + self._V.nbytes + self._VV.nbytes
-
-    def combine(self, others):
-        n_others = len(others)
-        scale = float(self._N * (1+n_others))
-        C00_new = self.C00.copy() / scale
-        C01_new = self.C01.copy() / scale
-        C11_new = self.C11.copy() / scale
-        for c in others:
-            C00_new += c.C00 / scale
-            C01_new += c.C01 / scale
-            C11_new += c.C11 / scale
-        return C00_new, C01_new, C11_new
+        with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=False,
+                               skip=self.offset) as it:
+            for X, Y in it:
+                yield X, Y
 
 
 class Covariances(StreamingEstimator):
@@ -366,91 +318,68 @@ class Covariances(StreamingEstimator):
     Parameters
     ----------
 
-    k : int, default=6
-        rank of sparse svd of input blocks
-
-    block_size: int, default=5000
+    tau: int, default=5000
         size of running blocks of input stream.
 
     mode: str, default="sliding"
 
-
     """
 
-    def __init__(self, k=6, block_size=5000, mode='sliding'):
+    def __init__(self, n_covs, tau=5000, offset=0, mode='sliding'):
         super(Covariances, self).__init__()
         if mode not in ('sliding', 'linear'):
             raise ValueError('unsupported mode: %s' % mode)
-        self.set_params(k=k, mode=mode, block_size=block_size)
+        self.set_params(mode=mode, tau=tau, offset=offset, n_covs=n_covs)
 
-    def _process(self, itraj, X, Y):
-        """
-        need to store:
-        * V
-        * sigmas
-        * UU'
-        * U'
-        * V'
-
-        if sliding window: only store the Y svd, as the X svd is the previous Y svd (store X only at start of traj).
-        """
-
-        def _svd(X, k):
-            if k >= X.shape[1]:
-                return svd(X, full_matrices=False)
-            else:
-                return svds(X, k)
-
-        current_covs = self.covs_[itraj]
-
-        if self.mode == "sliding" and len(current_covs) > 0:
-            U, S, V = self._U, current_covs[-1]._SS, current_covs[-1]._VV
-        else:
-            U, S, V_T = _svd(X, k=self.k)
-            V = V_T.T
-        UU, SS, VV_T = _svd(Y, k=self.k)
-        VV = VV_T.T
-
-        if self.mode == "sliding":
-            self._U = UU
-
-        current_covs.append(DecomposedCovPair(U, S, V, UU, SS, VV, self.block_size))
-
-    def _estimate(self, X):
-        self.k = min(self.k, X.ndim)
-
-        self.covs_ = [[] for _ in range(X.ntraj)]
+    def _estimate(self, iterable):
+        # todo nsave?
+        self.covs_ = np.array([running_covar(xx=True, xy=True, yy=True, remove_mean=False,
+                                             symmetrize=False, sparse_mode='auto',
+                                             modify_data=False, nsave=4) for _ in range(self.n_covs)])
 
         if self.mode == 'sliding':
-            splitter = SlidingCovariancesSplit(self.block_size)
+            splitter = SlidingCovariancesSplit(self.tau, self.offset)
         elif self.mode == 'linear':
-            splitter = LinearCovariancesSplit(self.block_size)
+            splitter = LinearCovariancesSplit(self.tau, self.offset)
         else:
             raise NotImplementedError("unsupported mode: %s" % self.mode)
 
-        for data in splitter.split(X):
-            self._process(*data)
+        idx = 0
+        for X, y in splitter.split(iterable):
+            # self._process(*data)
+            self.covs_[idx % len(self.covs_)].add(X, y)
+            idx += 1
 
-        import itertools
-        self.covs_ = np.array(tuple(itertools.chain(*self.covs_)))
-        self.n_covs_ = self.covs_.size
+    def _aggregate(self, selection, bessel=True):
+        covs = self.covs_[selection]
+        old_weights_xx = [c.weight_XX() for c in covs]
+        old_weights_xy = [c.weight_XY() for c in covs]
+        old_weights_yy = [c.weight_YY() for c in covs]
+        cumulative_weight_xx = sum(old_weights_xx)
+        cumulative_weight_xy = sum(old_weights_xy)
+        cumulative_weight_yy = sum(old_weights_yy)
+        for c in covs:
+            c.storage_XX.moments.w = cumulative_weight_xx
+            c.storage_XY.moments.w = cumulative_weight_xy
+            c.storage_YY.moments.w = cumulative_weight_yy
+        c00 = covs[0].cov_XX(bessel=bessel)
+        c01 = covs[0].cov_XY(bessel=bessel)
+        c11 = covs[0].cov_YY(bessel=bessel)
+        for rc in covs[1:]:
+            c00 += rc.cov_XX(bessel=bessel)
+            c01 += rc.cov_XY(bessel=bessel)
+            c11 += rc.cov_YY(bessel=bessel)
+        for c in covs:
+            c.storage_XX.storage[0].w = cumulative_weight_xx
+            c.storage_XY.storage[0].w = cumulative_weight_xy
+            c.storage_YY.storage[0].w = cumulative_weight_yy
+        return c00, c01, c11
 
-    def score(self, X, y, scoring_method='vamp2'):
-        test = self.covs_[X]
-        train = self.covs_[y]
-
+    def score(self, X, y, k=5, scoring_method='vamp2'):
         # split test and train test sets from input
-        C00_test, C01_test, C11_test = test[0].combine(test[1:] if len(test) > 1 else [])
-        C00_train, C01_train, C11_train = train[0].combine(train[1:] if len(train) > 1 else [])
-
-        # force matrices to be symmetric
-        C00_test = (C00_test + C00_test.T) / 2.0
-        C11_test = (C11_test + C11_test.T) / 2.0
-
-        C00_train = (C00_train + C00_train.T) / 2.0
-        C11_train = (C11_train + C11_train.T) / 2.0
-        C01_train = (C01_train + C01_train.T) / 2.0
+        C00_test, C01_test, C11_test = self._aggregate(X)
+        C00_train, C01_train, C11_train = self._aggregate(y)
 
         return vamp_score(K=C01_train, C00_test=C00_test, C0t_test=C01_test, Ctt_test=C11_test,
                           C00_train=C00_train, C0t_train=C01_train, Ctt_train=C11_train,
-                          k=self.k, score=scoring_method)
+                          k=k, score=scoring_method)

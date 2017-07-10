@@ -512,10 +512,10 @@ class TestCovPairs(unittest.TestCase):
                         np.random.random((500, 3))]
 
     def test_linear(self):
-        c = Covariances(block_size=200, mode='linear', k=2)
+        c = Covariances(3, tau=20, mode='linear')
         c.estimate(self.data_gen)
 
-        s = c.score(range(0, c.n_covs_//2), range(c.n_covs_//2, c.n_covs_))
+        s = c.score(range(0, c.n_covs//2), range(c.n_covs//2, c.n_covs))
         print(s)
 
         # s = 0
@@ -525,34 +525,34 @@ class TestCovPairs(unittest.TestCase):
         # print (s/1024**2)
 
     def test_sliding(self):
-        c = Covariances(block_size=250, mode='sliding', k=3)
+        c = Covariances(3, tau=20, mode='sliding')
         c.estimate(self.data_gen)
 
-        s = c.score(range(0, c.n_covs_//2), range(c.n_covs_//2, c.n_covs_))
+        s = c.score(range(0, c.n_covs//2), range(c.n_covs//2, c.n_covs))
         print(s)
 
     def test_lengths_sliding(self):
-        c = Covariances(block_size=100, mode='sliding', k=2)
+        c = Covariances(3, tau=20, mode='sliding')
         c.estimate(self.data_gen)
 
-        self.assertEqual(len(c.covs_), 4+4+2)
+        self.assertEqual(len(c.covs_), 3)
 
     def test_lengths_linear(self):
-        c = Covariances(block_size=100, mode='linear', k=2)
+        c = Covariances(3, tau=20, mode='linear')
         c.estimate(self.data_gen)
 
-        self.assertEqual(len(c.covs_), 9+9+4)
+        self.assertEqual(len(c.covs_), 3)
 
     def test_low_rank(self):
         block_size = 250
-        full_rank_cov = covariance_lagged(self.data_gen, lag=block_size, ctt=True, remove_data_mean=False, bessel=False)
+        full_rank_cov = covariance_lagged(self.data_gen, lag=block_size, ctt=True, remove_data_mean=False, bessel=True)
         c00 = full_rank_cov.cov
         c01 = full_rank_cov.cov_tau
         c11 = full_rank_cov.cov_tau_tau
 
-        c = Covariances(block_size=block_size, mode='linear', k=3)
+        c = Covariances(3, tau=250, mode='linear')
         c.estimate(self.data_gen)
-        C00_test, C01_test, C11_test = c.covs_[0].combine(c.covs_[1:])
+        C00_test, C01_test, C11_test = c._aggregate(np.array([0, 1, 2]))
 
         tol = 1e-15
         np.testing.assert_allclose(C00_test, c00, atol=tol, rtol=tol)
