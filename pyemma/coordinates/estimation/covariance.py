@@ -22,6 +22,8 @@ from itertools import count
 from math import log
 
 import numpy as np
+
+from scipy.linalg import svd
 from scipy.sparse.linalg import svds
 
 from pyemma._base.progress import ProgressReporter
@@ -141,7 +143,8 @@ class LaggedCovariance(StreamingEstimator, ProgressReporter):
             if old_nsave < nsave:
                 self.logger.info("adapting storage size")
                 self.nsave = nsave
-        else: # in case we do a one shot estimation, we want to re-initialize running_covar
+        else:
+            # in case we do a one shot estimation, we want to re-initialize running_covar
             self._logger.debug("using %s moments for %i chunks", nsave, n_chunks)
             self._rc = running_covar(xx=self.c00, xy=self.c0t, yy=self.ctt,
                                      remove_mean=self.remove_data_mean, symmetrize=self.reversible,
@@ -312,14 +315,15 @@ class SlidingCovariancesSplit(object):
 class DecomposedCovPair(object):
     _ids = count(0)
 
-    def __init__(self, U, S, V, UU, SS, VV):
+    def __init__(self, U, S, V, UU, SS, VV, tau):
         self._V = V
         self._VV = VV
         self._S = S
         self._SS = SS
         self._U_Uprime = np.matmul(U.T, UU)
-        self._N = 1 #len(U) -1
         self.id = next(DecomposedCovPair._ids)
+        self._N = len(U)
+        self.tau = tau
 
     def __repr__(self):
         return '[DecomposedCovPair <{id}>]'.format(id=self.id)
@@ -328,35 +332,32 @@ class DecomposedCovPair(object):
 
     @property
     def C00(self):
-        res = mdot(self._V, np.diag(self._S**2), self._V.T) / self._N
+        res = mdot(self._V, np.diag(self._S**2), self._V.T)
         return res
 
     @property
     def C01(self):
-        return mdot(self._V, np.diag(self._S), self._U_Uprime, np.diag(self._SS), self._VV.T) / self._N
+        return mdot(self._V, np.diag(self._S), self._U_Uprime, np.diag(self._SS), self._VV.T)
 
     @property
     def C11(self):
         S = np.diag(self._SS**2)
-        return mdot(self._VV, S, self._VV.T) / self._N
+        return mdot(self._VV, S, self._VV.T)
 
     @property
     def nbytes(self):
         return self._S.nbytes + self._SS.nbytes + self._U_Uprime.nbytes + self._V.nbytes + self._VV.nbytes
 
     def combine(self, others):
-        C00_new = self.C00.copy()
-        C01_new = self.C01.copy()
-        C11_new = self.C11.copy()
+        n_others = len(others)
+        scale = float(self._N * (1+n_others))
+        C00_new = self.C00.copy() / scale
+        C01_new = self.C01.copy() / scale
+        C11_new = self.C11.copy() / scale
         for c in others:
-            C00_new += c.C00
-            C01_new += c.C01
-            C11_new += c.C11
-
-        C00_new /= len(others)
-        C01_new /= len(others)
-        C11_new /= len(others)
-
+            C00_new += c.C00 / scale
+            C01_new += c.C01 / scale
+            C11_new += c.C11 / scale
         return C00_new, C01_new, C11_new
 
 
@@ -393,22 +394,31 @@ class Covariances(StreamingEstimator):
 
         if sliding window: only store the Y svd, as the X svd is the previous Y svd (store X only at start of traj).
         """
+
+        def _svd(X, k):
+            if k >= X.shape[1]:
+                return svd(X, full_matrices=False)
+            else:
+                return svds(X, k)
+
         current_covs = self.covs_[itraj]
 
         if self.mode == "sliding" and len(current_covs) > 0:
             U, S, V = self._U, current_covs[-1]._SS, current_covs[-1]._VV
         else:
-            U, S, V_T = svds(X, k=self.k)
+            U, S, V_T = _svd(X, k=self.k)
             V = V_T.T
-        UU, SS, VV_T = svds(Y, k=self.k)
+        UU, SS, VV_T = _svd(Y, k=self.k)
         VV = VV_T.T
 
         if self.mode == "sliding":
             self._U = UU
 
-        current_covs.append(DecomposedCovPair(U, S, V, UU, SS, VV))
+        current_covs.append(DecomposedCovPair(U, S, V, UU, SS, VV, self.block_size))
 
     def _estimate(self, X):
+        self.k = min(self.k, X.ndim)
+
         self.covs_ = [[] for _ in range(X.ntraj)]
 
         if self.mode == 'sliding':
@@ -421,41 +431,26 @@ class Covariances(StreamingEstimator):
         for data in splitter.split(X):
             self._process(*data)
 
-        self.covs_ = np.array(self.covs_)
+        import itertools
+        self.covs_ = np.array(tuple(itertools.chain(*self.covs_)))
+        self.n_covs_ = self.covs_.size
 
-    # TODO: this would be an interface of tica, wouldnt it? (because it scores the estimated covariance matrix, cov or cov_tau?!)
-    def score(self, percentage_test=0.30, scoring_method='vamp2'):
-        """
+    def score(self, X, y, scoring_method='vamp2'):
+        test = self.covs_[X]
+        train = self.covs_[y]
 
-        """
-        if not self._estimated:
-            raise RuntimeError('execute estimation first prior calling this method.')
-
-        shape = self.covs_.shape
-        p = (percentage_test, 1.0 - percentage_test)
-        sample = np.random.choice((True, False), size=shape, p=p)
-
-        test = self.covs_[sample]
-        train = self.covs_[~sample]
         # split test and train test sets from input
-        C00_test, C01_test, C11_test = test[0].combine(test[1:])
-        C00_train, C01_train, C11_train = train[0].combine(train[1:])
+        C00_test, C01_test, C11_test = test[0].combine(test[1:] if len(test) > 1 else [])
+        C00_train, C01_train, C11_train = train[0].combine(train[1:] if len(train) > 1 else [])
 
-        # TODO: why is this needed, eg. norming factor wrong?
+        # force matrices to be symmetric
         C00_test = (C00_test + C00_test.T) / 2.0
         C11_test = (C11_test + C11_test.T) / 2.0
 
         C00_train = (C00_train + C00_train.T) / 2.0
         C11_train = (C11_train + C11_train.T) / 2.0
+        C01_train = (C01_train + C01_train.T) / 2.0
 
-        K = 'left singular values of Koopman operator'
-        from pyemma.coordinates import covariance_lagged
-        full_cov = covariance_lagged(self.data_producer, lag=1)
-        from scipy.sparse.linalg import svds
-        #from numpy.linalg import svd as svds
-        #U, s, Vt = svds(full_cov.cov_tau, k=self.k)
-        #K = U
-        # K, C00_train, C0t_train, Ctt_train, C00_test, C0t_test, Ctt_test, k=None
-        return vamp_score(K=full_cov.cov_tau, C00_test=C00_test, C0t_test=C01_test, Ctt_test=C11_test,
+        return vamp_score(K=C01_train, C00_test=C00_test, C0t_test=C01_test, Ctt_test=C11_test,
                           C00_train=C00_train, C0t_train=C01_train, Ctt_train=C11_train,
                           k=self.k, score=scoring_method)

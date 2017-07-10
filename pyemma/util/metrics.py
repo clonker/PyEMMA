@@ -16,11 +16,13 @@ def _svd_sym_koopman(K, C00_train, Ctt_train, k):
     C0t_re = mdot(C00_train, K)
     # symmetrized operator and SVD
     K_sym = mdot(spd_inv_sqrt(C00_train), C0t_re, spd_inv_sqrt(Ctt_train))
-    if k is not None:
-        from scipy.sparse.linalg import svds
-        U, S, Vt = svds(K_sym, k=k)
-    else:
-        U, S, Vt = np.linalg.svd(K_sym, compute_uv=True, full_matrices=False)
+
+    # if k is not None:
+    #    from scipy.sparse.linalg import svds
+    #    U, S, Vt = svds(K_sym, k=k)
+    # else:
+
+    U, S, Vt = np.linalg.svd(K_sym, compute_uv=True, full_matrices=False)
     # projects back to singular functions of K
     U = mdot(spd_inv_sqrt(C00_train), U)
     Vt = mdot(Vt,spd_inv_sqrt(Ctt_train))

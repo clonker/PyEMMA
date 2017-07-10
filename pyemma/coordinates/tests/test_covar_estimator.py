@@ -1,6 +1,9 @@
 from __future__ import absolute_import
+
+import tempfile
 import unittest
 import numpy as np
+import pkg_resources
 
 from pyemma.coordinates import covariance_lagged
 from pyemma.coordinates import source
@@ -496,22 +499,25 @@ class TestCovarEstimatorWeightsList(unittest.TestCase):
 class TestCovPairs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # cls.data = source('/group/ag_cmb/simulation-data/BPTI_Shaw/calpha/bpti-1traj.xtc', top='/group/ag_cmb/simulation-data/BPTI_Shaw/calpha/bpti-c-alpha.pdb')
-        from glob import glob
-        path = "/group/ag_cmb/simulation-data/DESRES-Science2011-FastProteinFolding/DESRES-Trajectory_GTT-0-protein/GTT-0-protein/"
-        cls.data = source(glob(
-            path + "*.dcd")[:3],
-                          top=path + "/GTT-0-protein.pdb")
-        assert cls.data.ndim >= 2
+        from pyemma.coordinates.tests.util import create_traj
 
+        cls.tmpdir = tempfile.mkdtemp('test_feature_reader')
+
+        ##cls.topfile = pkg_resources.resource_filename(__name__, 'data/test.pdb')
+        #cls.trajfile, cls.xyz, cls.n_frames = create_traj(cls.topfile, dir=cls.tmpdir)
+        #cls.trajfile2, cls.xyz2, cls.n_frames2 = create_traj(cls.topfile, dir=cls.tmpdir)
+        #cls.data = source([cls.trajfile, cls.trajfile2], top=cls.topfile)
         cls.data_gen = [np.random.random((1000, 3)),
                         np.random.random((1000, 3)),
                         np.random.random((500, 3))]
 
     def test_linear(self):
-        c = Covariances(block_size=500, mode='linear')
-        c.estimate(self.data)
-        c.score()
+        c = Covariances(block_size=200, mode='linear', k=2)
+        c.estimate(self.data_gen)
+
+        s = c.score(range(0, c.n_covs_//2), range(c.n_covs_//2, c.n_covs_))
+        print(s)
+
         # s = 0
         # for a,b,c in c.covs_:
         #     s+= a.nbytes + b.nbytes + c.nbytes
@@ -519,47 +525,39 @@ class TestCovPairs(unittest.TestCase):
         # print (s/1024**2)
 
     def test_sliding(self):
-        c = Covariances(block_size=500, mode='sliding')
+        c = Covariances(block_size=250, mode='sliding', k=3)
         c.estimate(self.data_gen)
 
-        s = c.score()
+        s = c.score(range(0, c.n_covs_//2), range(c.n_covs_//2, c.n_covs_))
         print(s)
 
     def test_lengths_sliding(self):
         c = Covariances(block_size=100, mode='sliding', k=2)
         c.estimate(self.data_gen)
 
-        self.assertEqual(len(c.covs_), 3)
-        self.assertEqual(len(c.covs_[0]), 4)
-        self.assertEqual(len(c.covs_[1]), 4)
-        self.assertEqual(len(c.covs_[2]), 2)
-
-        c.covs_[0][0].C00
-        c.covs_[0][0].C01
-        c.covs_[0][0].C11
+        self.assertEqual(len(c.covs_), 4+4+2)
 
     def test_lengths_linear(self):
         c = Covariances(block_size=100, mode='linear', k=2)
         c.estimate(self.data_gen)
 
-        self.assertEqual(len(c.covs_), 3)
-        self.assertEqual(len(c.covs_[0]), 9)
-        self.assertEqual(len(c.covs_[1]), 9)
-        self.assertEqual(len(c.covs_[2]), 4)
+        self.assertEqual(len(c.covs_), 9+9+4)
 
     def test_low_rank(self):
-        block_size = 2 * 100 - 1
+        block_size = 250
         full_rank_cov = covariance_lagged(self.data_gen, lag=block_size, ctt=True, remove_data_mean=False, bessel=False)
         c00 = full_rank_cov.cov
         c01 = full_rank_cov.cov_tau
         c11 = full_rank_cov.cov_tau_tau
 
-        c = Covariances(block_size=block_size, mode='sliding', k=2)
+        c = Covariances(block_size=block_size, mode='linear', k=3)
         c.estimate(self.data_gen)
-        from functools import reduce
-        c00_ = reduce(lambda x, y: x + y, (c.C00 for c in c.covs_[0])) / len(c.covs_[0])
+        C00_test, C01_test, C11_test = c.covs_[0].combine(c.covs_[1:])
 
-        np.testing.assert_allclose(c00_, c00)
+        tol = 1e-15
+        np.testing.assert_allclose(C00_test, c00, atol=tol, rtol=tol)
+        np.testing.assert_allclose(C01_test, c01, atol=tol, rtol=tol)
+        np.testing.assert_allclose(C11_test, c11, atol=tol, rtol=tol)
 
 
 if __name__ == "__main__":
