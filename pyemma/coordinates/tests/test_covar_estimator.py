@@ -499,37 +499,9 @@ class TestCovarEstimatorWeightsList(unittest.TestCase):
 class TestCovPairs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from pyemma.coordinates.tests.util import create_traj
-
-        cls.tmpdir = tempfile.mkdtemp('test_feature_reader')
-
-        ##cls.topfile = pkg_resources.resource_filename(__name__, 'data/test.pdb')
-        #cls.trajfile, cls.xyz, cls.n_frames = create_traj(cls.topfile, dir=cls.tmpdir)
-        #cls.trajfile2, cls.xyz2, cls.n_frames2 = create_traj(cls.topfile, dir=cls.tmpdir)
-        #cls.data = source([cls.trajfile, cls.trajfile2], top=cls.topfile)
         cls.data_gen = [np.random.random((1000, 3)),
                         np.random.random((1000, 3)),
                         np.random.random((500, 3))]
-
-    def test_linear(self):
-        c = Covariances(3, tau=20, mode='linear')
-        c.estimate(self.data_gen)
-
-        s = c.score(range(0, c.n_covs//2), range(c.n_covs//2, c.n_covs))
-        print(s)
-
-        # s = 0
-        # for a,b,c in c.covs_:
-        #     s+= a.nbytes + b.nbytes + c.nbytes
-        #
-        # print (s/1024**2)
-
-    def test_sliding(self):
-        c = Covariances(3, tau=20, mode='sliding')
-        c.estimate(self.data_gen)
-
-        s = c.score(range(0, c.n_covs//2), range(c.n_covs//2, c.n_covs))
-        print(s)
 
     def test_lengths_sliding(self):
         c = Covariances(3, tau=20, mode='sliding')
@@ -543,21 +515,41 @@ class TestCovPairs(unittest.TestCase):
 
         self.assertEqual(len(c.covs_), 3)
 
-    def test_low_rank(self):
+    def test_reference_linear(self):
         block_size = 250
         full_rank_cov = covariance_lagged(self.data_gen, lag=block_size, ctt=True, remove_data_mean=False, bessel=True)
         c00 = full_rank_cov.cov
         c01 = full_rank_cov.cov_tau
         c11 = full_rank_cov.cov_tau_tau
 
-        c = Covariances(3, tau=250, mode='linear')
+        c = Covariances(3, tau=250, mode='linear', shift=0)
         c.estimate(self.data_gen)
-        C00_test, C01_test, C11_test = c._aggregate(np.array([0, 1, 2]))
+        covs_c00, covs_c01, covs_c11 = c._aggregate(np.array([0, 1, 2]))
 
         tol = 1e-15
-        np.testing.assert_allclose(C00_test, c00, atol=tol, rtol=tol)
-        np.testing.assert_allclose(C01_test, c01, atol=tol, rtol=tol)
-        np.testing.assert_allclose(C11_test, c11, atol=tol, rtol=tol)
+        np.testing.assert_allclose(covs_c00, c00, atol=tol, rtol=tol)
+        np.testing.assert_allclose(covs_c01, c01, atol=tol, rtol=tol)
+        np.testing.assert_allclose(covs_c11, c11, atol=tol, rtol=tol)
+
+    def test_reference_sliding(self):
+        full_rank_cov = covariance_lagged(self.data_gen, lag=50, ctt=True, remove_data_mean=False, bessel=True)
+        c00 = full_rank_cov.cov
+        c01 = full_rank_cov.cov_tau
+        c11 = full_rank_cov.cov_tau_tau
+
+        c = Covariances(3, tau=50, shift=0, mode='sliding')
+        c.estimate(self.data_gen)
+        covs_c00, covs_c01, covs_c11 = c._aggregate(np.array([0, 1, 2]))
+
+        tol = 1e-15
+        np.testing.assert_allclose(covs_c00, c00, atol=tol, rtol=tol)
+        np.testing.assert_allclose(covs_c01, c01, atol=tol, rtol=tol)
+        np.testing.assert_allclose(covs_c11, c11, atol=tol, rtol=tol)
+
+    def test_cv_sanity(self):
+        c = Covariances(10, tau=50, shift=0, mode='sliding')
+        c.estimate(self.data_gen)
+        _ = c.score_cv()
 
 
 if __name__ == "__main__":

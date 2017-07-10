@@ -281,19 +281,19 @@ class LaggedCovariance(StreamingEstimator, ProgressReporter):
 
 class LinearCovariancesSplit(object):
 
-    def __init__(self, block_size, offset):
+    def __init__(self, block_size, shift):
         self.block_size = block_size
-        self.offset = offset
+        self.shift = shift
 
     def split(self, X):
-        with X.iterator(chunk=self.block_size, return_trajindex=False, skip=self.offset) as it:
+        with X.iterator(chunk=self.block_size, return_trajindex=False, skip=self.shift) as it:
             X_, Y_ = None, None
 
             for X in it:
                 Y_ = X
 
                 if X_ is not None:
-                    yield X_, Y_
+                    yield X_[:len(Y_)], Y_
 
                 if not it.last_chunk_in_traj:
                     X_ = Y_
@@ -310,7 +310,7 @@ class SlidingCovariancesSplit(object):
         with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=False,
                                skip=self.offset) as it:
             for X, Y in it:
-                yield X, Y
+                yield X[:len(Y)], Y
 
 
 class Covariances(StreamingEstimator):
@@ -325,28 +325,27 @@ class Covariances(StreamingEstimator):
 
     """
 
-    def __init__(self, n_covs, tau=5000, offset=0, mode='sliding'):
+    def __init__(self, n_covs, n_save=5, tau=5000, shift=10, mode='sliding'):
         super(Covariances, self).__init__()
         if mode not in ('sliding', 'linear'):
             raise ValueError('unsupported mode: %s' % mode)
-        self.set_params(mode=mode, tau=tau, offset=offset, n_covs=n_covs)
+        self.set_params(mode=mode, tau=tau, shift=shift, n_covs=n_covs, n_save=n_save)
 
     def _estimate(self, iterable):
         # todo nsave?
         self.covs_ = np.array([running_covar(xx=True, xy=True, yy=True, remove_mean=False,
                                              symmetrize=False, sparse_mode='auto',
-                                             modify_data=False, nsave=4) for _ in range(self.n_covs)])
+                                             modify_data=False, nsave=self.n_save) for _ in range(self.n_covs)])
 
         if self.mode == 'sliding':
-            splitter = SlidingCovariancesSplit(self.tau, self.offset)
+            splitter = SlidingCovariancesSplit(self.tau, self.shift)
         elif self.mode == 'linear':
-            splitter = LinearCovariancesSplit(self.tau, self.offset)
+            splitter = LinearCovariancesSplit(self.tau, self.shift)
         else:
             raise NotImplementedError("unsupported mode: %s" % self.mode)
 
         idx = 0
         for X, y in splitter.split(iterable):
-            # self._process(*data)
             self.covs_[idx % len(self.covs_)].add(X, y)
             idx += 1
 
@@ -362,17 +361,13 @@ class Covariances(StreamingEstimator):
             c.storage_XX.moments.w = cumulative_weight_xx
             c.storage_XY.moments.w = cumulative_weight_xy
             c.storage_YY.moments.w = cumulative_weight_yy
-        c00 = covs[0].cov_XX(bessel=bessel)
-        c01 = covs[0].cov_XY(bessel=bessel)
-        c11 = covs[0].cov_YY(bessel=bessel)
-        for rc in covs[1:]:
-            c00 += rc.cov_XX(bessel=bessel)
-            c01 += rc.cov_XY(bessel=bessel)
-            c11 += rc.cov_YY(bessel=bessel)
-        for c in covs:
-            c.storage_XX.storage[0].w = cumulative_weight_xx
-            c.storage_XY.storage[0].w = cumulative_weight_xy
-            c.storage_YY.storage[0].w = cumulative_weight_yy
+        c00 = sum(c.cov_XX(bessel=bessel) for c in covs)
+        c01 = sum(c.cov_XY(bessel=bessel) for c in covs)
+        c11 = sum(c.cov_YY(bessel=bessel) for c in covs)
+        for idx, c in enumerate(covs):
+            c.storage_XX.storage[0].w = old_weights_xx[idx]
+            c.storage_XY.storage[0].w = old_weights_xy[idx]
+            c.storage_YY.storage[0].w = old_weights_yy[idx]
         return c00, c01, c11
 
     def score(self, X, y, k=5, scoring_method='vamp2'):
@@ -383,3 +378,17 @@ class Covariances(StreamingEstimator):
         return vamp_score(K=C01_train, C00_test=C00_test, C0t_test=C01_test, Ctt_test=C11_test,
                           C00_train=C00_train, C0t_train=C01_train, Ctt_train=C11_train,
                           k=k, score=scoring_method)
+
+    @staticmethod
+    def _split_train_test(n):
+        train = np.random.choice(n, int(n / 2), replace=False)
+        test = np.array(list(set(list(np.arange(n))) - set(list(train))))
+        return train, test
+
+    def score_cv(self, n=10, k=None, scoring_method='vamp2'):
+        scores = []
+        for i in range(n):
+            covs_train, covs_test = Covariances._split_train_test(self.n_covs)
+            score = self.score(covs_train, covs_test, k=k, scoring_method=scoring_method)
+            scores.append(score)
+        return scores
