@@ -279,48 +279,17 @@ class LaggedCovariance(StreamingEstimator, ProgressReporter):
                 self._rc.storage_XY.nsave = ns
 
 
-class LinearCovariancesSplit(object):
+class _ShuffleSplit(object):
 
-    def __init__(self, block_size, shift, stride):
-        self.block_size = block_size
-        self.shift = shift
-        self.stride = stride
+    def __init__(self, n_splits=3):
+        self.n_splits = n_splits
 
-    def n_chunks(self, iterable):
-        return iterable.n_chunks(self.block_size, skip=self.shift, stride=self.stride) - 1
-
-    def split(self, iterable):
-        with iterable.iterator(chunk=self.block_size, return_trajindex=False, skip=self.shift, stride=self.stride) as it:
-            first_chunk, next_chunk = None, None
-
-            for current_data in it:
-                next_chunk = current_data
-
-                if first_chunk is not None:
-                    yield first_chunk[:len(next_chunk)], next_chunk
-
-                if not it.last_chunk_in_traj:
-                    first_chunk = next_chunk
-                else:
-                    first_chunk, next_chunk = None, None
-
-
-class SlidingCovariancesSplit(object):
-    def __init__(self, block_size, offset, stride):
-        self.block_size = block_size
-        self.offset = offset
-        self.stride = stride
-
-    def n_chunks(self, iterable):
-        n1 = iterable.n_chunks(2 * self.block_size - 1, stride=self.stride, skip=self.offset)
-        n2 = iterable.n_chunks(2 * self.block_size - 1, stride=self.stride, skip=self.offset + self.block_size)
-        return min(n1, n2)
-
-    def split(self, iterable):
-        with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=False,
-                               skip=self.offset, stride=self.stride) as it:
-            for first_chunk, lagged_chunk in it:
-                yield first_chunk[:len(lagged_chunk)], lagged_chunk
+    def split(self, covs):
+        n = len(covs)
+        for _ in range(self.n_splits):
+            train = np.random.choice(n, int(n / 2), replace=False)
+            test = np.array(list(set(list(np.arange(n))) - set(list(train))))
+            yield train, test
 
 
 class Covariances(StreamingEstimator, ProgressReporter):
@@ -341,16 +310,58 @@ class Covariances(StreamingEstimator, ProgressReporter):
             raise ValueError('unsupported mode: %s' % mode)
         self.set_params(mode=mode, tau=tau, shift=shift, n_covs=n_covs, n_save=n_save, stride=stride)
 
+    class _LinearCovariancesSplit(object):
+
+        def __init__(self, block_size, shift, stride):
+            self.block_size = block_size
+            self.shift = shift
+            self.stride = stride
+
+        def n_chunks(self, iterable):
+            return iterable.n_chunks(self.block_size, skip=self.shift, stride=self.stride) - 1
+
+        def split(self, iterable):
+            with iterable.iterator(chunk=self.block_size, return_trajindex=False, skip=self.shift,
+                                   stride=self.stride) as it:
+                current_chunk, next_chunk = None, None
+
+                for current_data in it:
+                    next_chunk = current_data
+
+                    if current_chunk is not None:
+                        yield current_chunk[:len(next_chunk)], next_chunk
+
+                    if not it.last_chunk_in_traj:
+                        current_chunk = next_chunk
+                    else:
+                        current_chunk, next_chunk = None, None
+
+    class _SlidingCovariancesSplit(object):
+        def __init__(self, block_size, offset, stride):
+            self.block_size = block_size
+            self.offset = offset
+            self.stride = stride
+
+        def n_chunks(self, iterable):
+            n1 = iterable.n_chunks(2 * self.block_size - 1, stride=self.stride, skip=self.offset)
+            n2 = iterable.n_chunks(2 * self.block_size - 1, stride=self.stride, skip=self.offset + self.block_size)
+            return min(n1, n2)
+
+        def split(self, iterable):
+            with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=False,
+                                   skip=self.offset, stride=self.stride) as it:
+                for first_chunk, lagged_chunk in it:
+                    yield first_chunk[:len(lagged_chunk)], lagged_chunk
+
     def _estimate(self, iterable):
-        # todo nsave?
         self.covs_ = np.array([running_covar(xx=True, xy=True, yy=True, remove_mean=False,
                                              symmetrize=False, sparse_mode='auto',
                                              modify_data=False, nsave=self.n_save) for _ in range(self.n_covs)])
 
         if self.mode == 'sliding':
-            splitter = SlidingCovariancesSplit(self.tau, self.shift, self.stride)
+            splitter = self._SlidingCovariancesSplit(self.tau, self.shift, self.stride)
         elif self.mode == 'linear':
-            splitter = LinearCovariancesSplit(self.tau, self.shift, self.stride)
+            splitter = self._LinearCovariancesSplit(self.tau, self.shift, self.stride)
         else:
             raise NotImplementedError("unsupported mode: %s" % self.mode)
 
@@ -361,11 +372,17 @@ class Covariances(StreamingEstimator, ProgressReporter):
             self.covs_[idx % len(self.covs_)].add(X, y)
             idx += 1
             self._progress_update(1, stage=0)
+
+        self.covs_ = np.array(list(filter(lambda c: len(c.storage_XX.storage) > 0, self.covs_)))
+        self.n_covs_ = len(self.covs_)
+
+        if self.n_covs != self.n_covs_:
+            self.logger.info("truncated covariance matrices due to lack of data (%s -> %s)", self.n_covs, self.n_covs_)
+
         self._progress_force_finish(stage=0)
 
     def _aggregate(self, selection, bessel=True):
         covs = self.covs_[selection]
-        covs = list(filter(lambda c: len(c.storage_XX.storage) > 0, covs))
         if len(covs) == 0:
             raise ValueError("all the selected (%s) covariance matrices were empty!" % selection)
         old_weights_xx = [c.weight_XX() for c in covs]
@@ -401,20 +418,19 @@ class Covariances(StreamingEstimator, ProgressReporter):
                           C00_train=c00_train, C0t_train=c01_train, Ctt_train=c11_train,
                           k=k, score=scoring_method)
 
-    @staticmethod
-    def _split_train_test(n):
-        train = np.random.choice(n, int(n / 2), replace=False)
-        test = np.array(list(set(list(np.arange(n))) - set(list(train))))
-        return train, test
-
-    def score_cv(self, n=10, k=None, scoring_method='vamp2'):
+    def score_cv(self, n=10, k=None, scoring_method='vamp2', splitter='shuffle'):
         self._progress_register(n, "score cv", stage="cv")
         self._progress_update(0, stage="cv")
         scores = []
-        for i in range(n):
-            covs_train, covs_test = Covariances._split_train_test(self.n_covs)
+
+        if splitter == 'shuffle':
+            splitter = _ShuffleSplit(n)
+        elif not (hasattr(splitter, 'split') and callable(splitter.split)):
+            raise ValueError("splitter must be either \"split\" or splitter instance with split(X) method")
+
+        for covs_train, covs_test in splitter.split(self.covs_):
             score = self.score(covs_train, covs_test, k=k, scoring_method=scoring_method)
             scores.append(score)
             self._progress_update(1, stage="cv")
         self._progress_force_finish(stage="cv")
-        return scores
+        return np.array(scores)
