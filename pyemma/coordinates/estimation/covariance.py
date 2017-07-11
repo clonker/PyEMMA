@@ -285,20 +285,23 @@ class LinearCovariancesSplit(object):
         self.block_size = block_size
         self.shift = shift
 
-    def split(self, X):
-        with X.iterator(chunk=self.block_size, return_trajindex=False, skip=self.shift) as it:
-            X_, Y_ = None, None
+    def n_chunks(self, iterable):
+        return iterable.n_chunks(self.block_size, skip=self.shift) - 1
 
-            for X in it:
-                Y_ = X
+    def split(self, iterable):
+        with iterable.iterator(chunk=self.block_size, return_trajindex=False, skip=self.shift) as it:
+            first_chunk, next_chunk = None, None
 
-                if X_ is not None:
-                    yield X_[:len(Y_)], Y_
+            for current_data in it:
+                next_chunk = current_data
+
+                if first_chunk is not None:
+                    yield first_chunk[:len(next_chunk)], next_chunk
 
                 if not it.last_chunk_in_traj:
-                    X_ = Y_
+                    first_chunk = next_chunk
                 else:
-                    X_, Y_ = None, None
+                    first_chunk, next_chunk = None, None
 
 
 class SlidingCovariancesSplit(object):
@@ -306,14 +309,19 @@ class SlidingCovariancesSplit(object):
         self.block_size = block_size
         self.offset = offset
 
+    def n_chunks(self, iterable):
+        n1 = iterable.n_chunks(2 * self.block_size - 1, stride=1, skip=self.offset)
+        n2 = iterable.n_chunks(2 * self.block_size - 1, stride=1, skip=self.offset + self.block_size)
+        return min(n1, n2)
+
     def split(self, iterable):
         with iterable.iterator(lag=self.block_size, chunk=2 * self.block_size - 1, return_trajindex=False,
                                skip=self.offset) as it:
-            for X, Y in it:
-                yield X[:len(Y)], Y
+            for first_chunk, lagged_chunk in it:
+                yield first_chunk[:len(lagged_chunk)], lagged_chunk
 
 
-class Covariances(StreamingEstimator):
+class Covariances(StreamingEstimator, ProgressReporter):
     """
     Parameters
     ----------
@@ -344,10 +352,14 @@ class Covariances(StreamingEstimator):
         else:
             raise NotImplementedError("unsupported mode: %s" % self.mode)
 
+        self._progress_register(splitter.n_chunks(iterable), "calculate covariances", 0)
+
         idx = 0
         for X, y in splitter.split(iterable):
             self.covs_[idx % len(self.covs_)].add(X, y)
             idx += 1
+            self._progress_update(1, stage=0)
+        self._progress_force_finish(stage=0)
 
     def _aggregate(self, selection, bessel=True):
         covs = self.covs_[selection]
@@ -358,25 +370,31 @@ class Covariances(StreamingEstimator):
         cumulative_weight_xy = sum(old_weights_xy)
         cumulative_weight_yy = sum(old_weights_yy)
         for c in covs:
-            c.storage_XX.moments.w = cumulative_weight_xx
-            c.storage_XY.moments.w = cumulative_weight_xy
-            c.storage_YY.moments.w = cumulative_weight_yy
+            if len(c.storage_XX.storage) > 0:
+                c.storage_XX.moments.w = cumulative_weight_xx
+            if len(c.storage_XY.storage) > 0:
+                c.storage_XY.moments.w = cumulative_weight_xy
+            if len(c.storage_YY.storage) > 0:
+                c.storage_YY.moments.w = cumulative_weight_yy
         c00 = sum(c.cov_XX(bessel=bessel) for c in covs)
         c01 = sum(c.cov_XY(bessel=bessel) for c in covs)
         c11 = sum(c.cov_YY(bessel=bessel) for c in covs)
         for idx, c in enumerate(covs):
-            c.storage_XX.storage[0].w = old_weights_xx[idx]
-            c.storage_XY.storage[0].w = old_weights_xy[idx]
-            c.storage_YY.storage[0].w = old_weights_yy[idx]
+            if len(c.storage_XX.storage) > 0:
+                c.storage_XX.storage[0].w = old_weights_xx[idx]
+            if len(c.storage_XY.storage) > 0:
+                c.storage_XY.storage[0].w = old_weights_xy[idx]
+            if len(c.storage_YY.storage) > 0:
+                c.storage_YY.storage[0].w = old_weights_yy[idx]
         return c00, c01, c11
 
-    def score(self, X, y, k=5, scoring_method='vamp2'):
+    def score(self, test_covs, train_covs, k=5, scoring_method='vamp2'):
         # split test and train test sets from input
-        C00_test, C01_test, C11_test = self._aggregate(X)
-        C00_train, C01_train, C11_train = self._aggregate(y)
+        c00_test, c01_test, c11_test = self._aggregate(test_covs)
+        c00_train, c01_train, c11_train = self._aggregate(train_covs)
 
-        return vamp_score(K=C01_train, C00_test=C00_test, C0t_test=C01_test, Ctt_test=C11_test,
-                          C00_train=C00_train, C0t_train=C01_train, Ctt_train=C11_train,
+        return vamp_score(K=c01_train, C00_test=c00_test, C0t_test=c01_test, Ctt_test=c11_test,
+                          C00_train=c00_train, C0t_train=c01_train, Ctt_train=c11_train,
                           k=k, score=scoring_method)
 
     @staticmethod
@@ -386,9 +404,12 @@ class Covariances(StreamingEstimator):
         return train, test
 
     def score_cv(self, n=10, k=None, scoring_method='vamp2'):
+        self._progress_register(n, "score cv", stage="cv")
         scores = []
         for i in range(n):
             covs_train, covs_test = Covariances._split_train_test(self.n_covs)
             score = self.score(covs_train, covs_test, k=k, scoring_method=scoring_method)
             scores.append(score)
+            self._progress_update(1, stage="cv")
+        self._progress_force_finish(stage="cv")
         return scores
