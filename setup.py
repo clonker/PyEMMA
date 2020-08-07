@@ -218,18 +218,22 @@ def get_cmdclass():
             'msvc': ['/EHsc'],
             'unix': [],
         }
+        l_opts = {
+            'msvc': [],
+            'unix': []
+        }
 
         def build_extensions(self):
             from setup_util import cpp_flag, has_flag, detect_openmp
             # enable these options only for clang, OSX
             if sys.platform == 'darwin':
-                import sysconfig
-                compiler = os.path.basename(sysconfig.get_config_var("CC"))
-                if 'clang' in str(compiler):
-                    self.c_opts['unix'] += ['-stdlib=libc++', '-mmacosx-version-min=10.7']
+                darwin_opts = ['-stdlib=libc++', '-mmacosx-version-min=10.7']
+                self.c_opts['unix'] += darwin_opts
+                self.l_opts['unix'] += darwin_opts
 
             ct = self.compiler.compiler_type
             opts = self.c_opts.get(ct, [])
+            l_opts = self.l_opts.get(ct, [])
             if ct == 'unix':
                 opts.append('-DVERSION_INFO="%s"' % self.distribution.get_version())
                 opts.append(cpp_flag(self.compiler))
@@ -257,6 +261,7 @@ def get_cmdclass():
             for ext in self.extensions:
                 if ext.language == 'c++':
                     ext.extra_compile_args = opts + dbg_flag
+                    ext.extra_link_args = l_opts
                 elif ext.language is None:  # C
                     ext.extra_compile_args += dbg_flag
                 if openmp_enabled:
